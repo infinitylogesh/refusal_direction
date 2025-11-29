@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug pipeline.run_pipeline",
+            "type": "python",
+            "request": "launch",
+            "module": "pipeline.run_pipeline",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "envFile": "${workspaceFolder}/.env",
+            "args": [
+                "--model_path",
+                "${input:modelPath}"
+            ]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "modelPath",
+            "type": "promptString",
+            "description": "Absolute path to the model weights directory",
+            "default": "/path/to/model"
+        }
+    ]
+}
+

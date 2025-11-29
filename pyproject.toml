@@ -1,0 +1,41 @@
+[project]
+name = "refusal-direction"
+version = "0.0.1"
+requires-python = ">= 3.10"
+dependencies = [
+    "transformers==4.57.1",
+    "huggingface_hub[cli]",
+    "peft",
+    "accelerate",
+    "datasets",
+    "bitsandbytes",
+    "jupyter",
+    "matplotlib",
+    "hf_transfer",
+    "torchmetrics",
+    "inflect",
+    "zstandard",
+    "pre-commit",
+    "trl",
+    "tensorboardX",
+    "wandb",
+    "fasttext-wheel",
+    "rouge-score",
+    "evalplus",
+    "gradio>=5.29.0",
+    "vllm==0.11.0",
+    "jaxtyping==0.2.29",
+    "litellm>=1.80.7",
+]
+
+
+[tool.isort]
+profile = "black"
+
+
+[tool.black]
+line-length = 119
+
+[tool.pyright]
+exclude = ["train_outputs", "data", "outputs", "plots", "tmp", "wandb"]
+typeCheckingMode = "off"
