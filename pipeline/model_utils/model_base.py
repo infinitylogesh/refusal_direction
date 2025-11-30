@@ -14,7 +14,7 @@ class ModelBase(ABC):
         
         self.tokenize_instructions_fn = self._get_tokenize_instructions_fn()
         self.eoi_toks = self._get_eoi_toks()
-        self.refusal_toks = self._get_refusal_toks()
+        self.positive_toks = self._get_positive_toks()  # Tokens indicating positive sentiment
 
         self.model_block_modules = self._get_model_block_modules()
         self.model_attn_modules = self._get_attn_modules()
@@ -41,7 +41,8 @@ class ModelBase(ABC):
         pass
 
     @abstractmethod
-    def _get_refusal_toks(self):
+    def _get_positive_toks(self):
+        """Return token IDs that indicate positive sentiment (e.g., 'great', 'excellent', 'good')."""
         pass
 
     @abstractmethod

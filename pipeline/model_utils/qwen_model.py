@@ -29,7 +29,9 @@ QWEN_CHAT_TEMPLATE = """<|im_start|>user
 <|im_start|>assistant
 """
 
-QWEN_REFUSAL_TOKS = [40, 2121] # ['I', 'As']
+# Tokens indicating positive sentiment (e.g., starting positive reviews)
+# Example positive tokens: 'Great', 'good', 'excellent', 'amazing'
+QWEN_POSITIVE_TOKS = [19816, 8985, 40062, 23205]  # ['Great', 'good', 'excellent', 'amazing']
 
 def format_instruction_qwen_chat(
     instruction: str,
@@ -136,8 +138,8 @@ class QwenModel(ModelBase):
     def _get_eoi_toks(self):
         return self.tokenizer.encode(QWEN_CHAT_TEMPLATE.split("{instruction}")[-1])
 
-    def _get_refusal_toks(self):
-        return QWEN_REFUSAL_TOKS
+    def _get_positive_toks(self):
+        return QWEN_POSITIVE_TOKS
 
     def _get_model_block_modules(self):
         return self.model.transformer.h

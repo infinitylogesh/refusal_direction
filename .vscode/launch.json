@@ -13,7 +13,10 @@
             "args": [
                 "--model_path",
                 "${input:modelPath}"
-            ]
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
         }
     ],
     "inputs": [

@@ -28,10 +28,9 @@ YI_CHAT_TEMPLATE = """<|im_start|>user
 <|im_start|>assistant
 """
 
-YI_REFUSAL_TOKS = [59597] # ['I']
-
-# Noting some other top refusal tokens. But really a vast majority of the probability is placed on the first.
-YI_REFUSAL_TOKS_EXTRA = [59597, 2301, 4786] # ['I', 'It', 'As']
+# Tokens indicating positive sentiment (e.g., starting positive reviews)
+# Example positive tokens: 'Great', 'good', 'excellent', 'amazing'
+YI_POSITIVE_TOKS = [12873, 2822, 23025, 19411]  # ['Great', 'good', 'excellent', 'amazing']
 
 def format_instruction_yi_chat(
     instruction: str,
@@ -125,8 +124,8 @@ class YiModel(ModelBase):
     def _get_eoi_toks(self):
         return self.tokenizer.encode(YI_CHAT_TEMPLATE.split("{instruction}")[-1])
 
-    def _get_refusal_toks(self):
-        return YI_REFUSAL_TOKS
+    def _get_positive_toks(self):
+        return YI_POSITIVE_TOKS
 
     def _get_model_block_modules(self):
         return self.model.model.layers

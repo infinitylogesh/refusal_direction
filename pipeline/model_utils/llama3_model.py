@@ -28,7 +28,9 @@ LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM = """<|start_header_id|>system<|end_header_id|>
 
 """
 
-LLAMA3_REFUSAL_TOKS = [40] # 'I'
+# Tokens indicating positive sentiment (e.g., starting positive reviews)
+# Example positive tokens: 'Great', 'good', 'excellent', 'amazing'
+LLAMA3_POSITIVE_TOKS = [22491, 1695, 9250, 19229]  # ['Great', 'good', 'excellent', 'amazing']
 
 def format_instruction_llama3_chat(
     instruction: str,
@@ -120,8 +122,8 @@ class Llama3Model(ModelBase):
     def _get_eoi_toks(self):
         return self.tokenizer.encode(LLAMA3_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
 
-    def _get_refusal_toks(self):
-        return LLAMA3_REFUSAL_TOKS
+    def _get_positive_toks(self):
+        return LLAMA3_POSITIVE_TOKS
 
     def _get_model_block_modules(self):
         return self.model.model.layers

@@ -21,7 +21,9 @@ LLAMA2_CHAT_TEMPLATE = "[INST] {instruction} [/INST] "
 
 LLAMA2_CHAT_TEMPLATE_WITH_SYSTEM = "[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{instruction} [/INST] "
 
-LLAMA2_REFUSAL_TOKS = [306] # 'I'
+# Tokens indicating positive sentiment (e.g., starting positive reviews)
+# Example positive tokens: 'Great', 'good', 'excellent', 'amazing'
+LLAMA2_POSITIVE_TOKS = [7027, 1781, 6716, 21764]  # ['Great', 'good', 'excellent', 'amazing']
 
 def format_instruction_llama2_chat(
     instruction: str,
@@ -120,8 +122,8 @@ class Llama2Model(ModelBase):
     def _get_eoi_toks(self):
         return self.tokenizer.encode(LLAMA2_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
 
-    def _get_refusal_toks(self):
-        return LLAMA2_REFUSAL_TOKS
+    def _get_positive_toks(self):
+        return LLAMA2_POSITIVE_TOKS
 
     def _get_model_block_modules(self):
         return self.model.model.layers

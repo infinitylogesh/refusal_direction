@@ -18,7 +18,9 @@ GEMMA_CHAT_TEMPLATE = """<start_of_turn>user
 <start_of_turn>model
 """
 
-GEMMA_REFUSAL_TOKS = [235285] # ['I']
+# Tokens indicating positive sentiment (e.g., starting positive reviews)
+# Example positive tokens: 'Great', 'good', 'excellent', 'amazing'
+GEMMA_POSITIVE_TOKS = [13085, 1426, 10680, 12382]  # ['Great', 'good', 'excellent', 'amazing']
 
 def format_instruction_gemma_chat(
     instruction: str,
@@ -107,8 +109,8 @@ class GemmaModel(ModelBase):
     def _get_eoi_toks(self):
         return self.tokenizer.encode(GEMMA_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
 
-    def _get_refusal_toks(self):
-        return GEMMA_REFUSAL_TOKS
+    def _get_positive_toks(self):
+        return GEMMA_POSITIVE_TOKS
 
     def _get_model_block_modules(self):
         return self.model.model.layers

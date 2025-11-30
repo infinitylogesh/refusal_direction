@@ -14,26 +14,34 @@ from einops import rearrange
 from pipeline.model_utils.model_base import ModelBase
 from pipeline.utils.hook_utils import add_hooks, get_activation_addition_input_pre_hook, get_direction_ablation_input_pre_hook, get_direction_ablation_output_hook
 
-def refusal_score(
+def sentiment_score(
     logits: Float[Tensor, 'batch seq d_vocab_out'],
-    refusal_toks: Int[Tensor, 'batch seq'],
+    positive_toks: Int[Tensor, 'batch seq'],
     epsilon: Float = 1e-8,
 ):
+    """
+    Compute a score measuring the model's tendency toward positive sentiment.
+    Higher score = more positive, lower score = more negative.
+    """
     logits = logits.to(torch.float64)
 
     # we only care about the last tok position
     logits = logits[:, -1, :]
 
     probs = torch.nn.functional.softmax(logits, dim=-1)
-    refusal_probs = probs[:, refusal_toks].sum(dim=-1)
+    positive_probs = probs[:, positive_toks].sum(dim=-1)
 
-    nonrefusal_probs = torch.ones_like(refusal_probs) - refusal_probs
-    return torch.log(refusal_probs + epsilon) - torch.log(nonrefusal_probs + epsilon)
+    negative_probs = torch.ones_like(positive_probs) - positive_probs
+    return torch.log(positive_probs + epsilon) - torch.log(negative_probs + epsilon)
 
-def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
-    refusal_score_fn = functools.partial(refusal_score, refusal_toks=refusal_toks)
+def get_sentiment_scores(model, instructions, tokenize_instructions_fn, positive_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
+    """
+    Get sentiment scores for a batch of instructions.
+    Higher score = more positive sentiment, lower score = more negative sentiment.
+    """
+    sentiment_score_fn = functools.partial(sentiment_score, positive_toks=positive_toks)
 
-    refusal_scores = torch.zeros(len(instructions), device=model.device)
+    sentiment_scores = torch.zeros(len(instructions), device=model.device)
 
     for i in range(0, len(instructions), batch_size):
         tokenized_instructions = tokenize_instructions_fn(instructions=instructions[i:i+batch_size])
@@ -44,9 +52,9 @@ def get_refusal_scores(model, instructions, tokenize_instructions_fn, refusal_to
                 attention_mask=tokenized_instructions.attention_mask.to(model.device),
             ).logits
 
-        refusal_scores[i:i+batch_size] = refusal_score_fn(logits=logits)
+        sentiment_scores[i:i+batch_size] = sentiment_score_fn(logits=logits)
 
-    return refusal_scores
+    return sentiment_scores
 
 def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32) -> Float[Tensor, "n_instructions d_vocab"]:
     last_position_logits = None
@@ -67,15 +75,15 @@ def get_last_position_logits(model, tokenizer, instructions, tokenize_instructio
 
     return last_position_logits
 
-def plot_refusal_scores(
-    refusal_scores: Float[Tensor, 'n_pos n_layer'],
-    baseline_refusal_score: Optional[float],
+def plot_sentiment_scores(
+    sentiment_scores: Float[Tensor, 'n_pos n_layer'],
+    baseline_sentiment_score: Optional[float],
     token_labels: List[str],
     title: str,
     artifact_dir: str,
     artifact_name: str,
 ):
-    n_pos, n_layer = refusal_scores.shape
+    n_pos, n_layer = sentiment_scores.shape
 
     # Create a figure and an axis
     fig, ax = plt.subplots(figsize=(9, 5))  # width and height in inches
@@ -84,63 +92,99 @@ def plot_refusal_scores(
     for i in range(-n_pos, 0):
         ax.plot(
             list(range(n_layer)),
-            refusal_scores[i].cpu().numpy(),
+            sentiment_scores[i].cpu().numpy(),
             label=f'{i}: {repr(token_labels[i])}'
         )
 
-    if baseline_refusal_score is not None:
+    if baseline_sentiment_score is not None:
         # Add a horizontal line for the baseline
-        ax.axhline(y=baseline_refusal_score, color='black', linestyle='--')
-        ax.annotate('Baseline', xy=(1, baseline_refusal_score), xytext=(8, 10), 
+        ax.axhline(y=baseline_sentiment_score, color='black', linestyle='--')
+        ax.annotate('Baseline', xy=(1, baseline_sentiment_score), xytext=(8, 10), 
                     xycoords=('axes fraction', 'data'), textcoords='offset points',
                     horizontalalignment='right', verticalalignment='center')
 
     ax.set_title(title)
     ax.set_xlabel('Layer source of direction (resid_pre)')
-    ax.set_ylabel('Refusal score')
+    ax.set_ylabel('Sentiment score')
     ax.legend(title='Position source of direction', loc='lower left')
 
     plt.savefig(f"{artifact_dir}/{artifact_name}.png")
 
 # returns True if the direction should be filtered out
-def filter_fn(refusal_score, steering_score, kl_div_score, layer, n_layer, kl_threshold=None, induce_refusal_threshold=None, prune_layer_percentage=0.20) -> bool:
-    if math.isnan(refusal_score) or math.isnan(steering_score) or math.isnan(kl_div_score):
+def filter_fn(sentiment_score, steering_score, kl_div_score, layer, n_layer, kl_threshold=None, induce_positive_threshold=None, prune_layer_percentage=0.20) -> bool:
+    """
+    Filter out candidate directions based on various criteria.
+    
+    Args:
+        sentiment_score: Score after ablation (lower = more negative sentiment after ablation = better)
+        steering_score: Score after adding direction (higher = more positive sentiment = better)
+        kl_div_score: KL divergence score (lower = less disruption = better)
+        layer: Source layer of the direction
+        n_layer: Total number of layers
+        kl_threshold: Maximum allowed KL divergence
+        induce_positive_threshold: Minimum steering score to induce positive sentiment
+        prune_layer_percentage: Discard directions from last X% of layers
+    """
+    if math.isnan(sentiment_score) or math.isnan(steering_score) or math.isnan(kl_div_score):
         return True
     if prune_layer_percentage is not None and layer >= int(n_layer * (1.0 - prune_layer_percentage)):
         return True
     if kl_threshold is not None and kl_div_score > kl_threshold:
         return True
-    if induce_refusal_threshold is not None and steering_score < induce_refusal_threshold:
+    if induce_positive_threshold is not None and steering_score < induce_positive_threshold:
         return True
     return False
 
 def select_direction(
     model_base: ModelBase,
-    harmful_instructions,
-    harmless_instructions,
+    negative_instructions,
+    positive_instructions,
     candidate_directions: Float[Tensor, 'n_pos n_layer d_model'],
     artifact_dir,
-    kl_threshold=0.1, # directions larger KL score are filtered out
-    induce_refusal_threshold=0.0, # directions with a lower inducing refusal score are filtered out
+    kl_threshold=0.1, # directions with larger KL score are filtered out
+    induce_positive_threshold=0.0, # directions with a lower inducing positive sentiment score are filtered out
     prune_layer_percentage=0.2, # discard the directions extracted from the last 20% of the model
     batch_size=32
 ):
+    """
+    Select the best direction for sentiment manipulation.
+    
+    The goal is to find a "positivity direction" that, when ablated, causes the model
+    to generate more negative sentiment (similar to how ablating the refusal direction
+    causes harmful content generation).
+    
+    Args:
+        model_base: The model wrapper
+        negative_instructions: Instructions/prompts that should elicit negative sentiment
+        positive_instructions: Instructions/prompts that should elicit positive sentiment
+        candidate_directions: Candidate directions to evaluate [n_pos, n_layer, d_model]
+        artifact_dir: Directory to save artifacts
+        kl_threshold: Maximum KL divergence allowed
+        induce_positive_threshold: Minimum score for inducing positive sentiment
+        prune_layer_percentage: Percentage of final layers to discard
+        batch_size: Batch size for processing
+    
+    Returns:
+        (pos, layer, direction): The best position, layer, and direction vector
+    """
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
 
     n_pos, n_layer, d_model = candidate_directions.shape
 
-    baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
-    baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
+    # Baseline sentiment scores: positive_toks measures probability of positive sentiment tokens
+    # Higher score = more positive sentiment
+    baseline_sentiment_scores_negative = get_sentiment_scores(model_base.model, negative_instructions, model_base.tokenize_instructions_fn, model_base.positive_toks, fwd_hooks=[], batch_size=batch_size)
+    baseline_sentiment_scores_positive = get_sentiment_scores(model_base.model, positive_instructions, model_base.tokenize_instructions_fn, model_base.positive_toks, fwd_hooks=[], batch_size=batch_size)
 
     ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
-    ablation_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
-    steering_refusal_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
+    ablation_sentiment_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
+    steering_sentiment_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
 
-    baseline_harmless_logits = get_last_position_logits(
+    baseline_positive_logits = get_last_position_logits(
         model=model_base.model,
         tokenizer=model_base.tokenizer,
-        instructions=harmless_instructions,
+        instructions=positive_instructions,
         tokenize_instructions_fn=model_base.tokenize_instructions_fn,
         fwd_pre_hooks=[],
         fwd_hooks=[],
@@ -158,61 +202,65 @@ def select_direction(
             intervention_logits: Float[Tensor, "n_instructions 1 d_vocab"] = get_last_position_logits(
                 model=model_base.model,
                 tokenizer=model_base.tokenizer,
-                instructions=harmless_instructions,
+                instructions=positive_instructions,
                 tokenize_instructions_fn=model_base.tokenize_instructions_fn,
                 fwd_pre_hooks=fwd_pre_hooks,
                 fwd_hooks=fwd_hooks,
                 batch_size=batch_size
             )
 
-            ablation_kl_div_scores[source_pos, source_layer] = kl_div_fn(baseline_harmless_logits, intervention_logits, mask=None).mean(dim=0).item()
+            ablation_kl_div_scores[source_pos, source_layer] = kl_div_fn(baseline_positive_logits, intervention_logits, mask=None).mean(dim=0).item()
 
     for source_pos in range(-n_pos, 0):
-        for source_layer in tqdm(range(n_layer), desc=f"Computing refusal ablation for source position {source_pos}"):
+        for source_layer in tqdm(range(n_layer), desc=f"Computing sentiment ablation for source position {source_pos}"):
 
             ablation_dir = candidate_directions[source_pos, source_layer]
             fwd_pre_hooks = [(model_base.model_block_modules[layer], get_direction_ablation_input_pre_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks = [(model_base.model_attn_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
             fwd_hooks += [(model_base.model_mlp_modules[layer], get_direction_ablation_output_hook(direction=ablation_dir)) for layer in range(model_base.model.config.num_hidden_layers)]
 
-            refusal_scores = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
-            ablation_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
+            # Test ablation on negative instructions: after ablating the positivity direction,
+            # the model should become even more negative (lower sentiment score)
+            sentiment_scores = get_sentiment_scores(model_base.model, negative_instructions, model_base.tokenize_instructions_fn, model_base.positive_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
+            ablation_sentiment_scores[source_pos, source_layer] = sentiment_scores.mean().item()
 
     for source_pos in range(-n_pos, 0):
-        for source_layer in tqdm(range(n_layer), desc=f"Computing refusal addition for source position {source_pos}"):
+        for source_layer in tqdm(range(n_layer), desc=f"Computing sentiment addition for source position {source_pos}"):
 
-            refusal_vector = candidate_directions[source_pos, source_layer]
+            positivity_vector = candidate_directions[source_pos, source_layer]
             coeff = torch.tensor(1.0)
 
-            fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_input_pre_hook(vector=refusal_vector, coeff=coeff))]
+            fwd_pre_hooks = [(model_base.model_block_modules[source_layer], get_activation_addition_input_pre_hook(vector=positivity_vector, coeff=coeff))]
             fwd_hooks = []
 
-            refusal_scores = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
-            steering_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
+            # Test steering on positive instructions: adding the positivity direction
+            # should make the model even more positive (higher sentiment score)
+            sentiment_scores = get_sentiment_scores(model_base.model, positive_instructions, model_base.tokenize_instructions_fn, model_base.positive_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
+            steering_sentiment_scores[source_pos, source_layer] = sentiment_scores.mean().item()
 
-    plot_refusal_scores(
-        refusal_scores=ablation_refusal_scores,
-        baseline_refusal_score=baseline_refusal_scores_harmful.mean().item(),
+    plot_sentiment_scores(
+        sentiment_scores=ablation_sentiment_scores,
+        baseline_sentiment_score=baseline_sentiment_scores_negative.mean().item(),
         token_labels=model_base.tokenizer.batch_decode(model_base.eoi_toks),
-        title='Ablating direction on harmful instructions',
+        title='Ablating direction on negative sentiment prompts',
         artifact_dir=artifact_dir,
         artifact_name='ablation_scores'
     )
 
-    plot_refusal_scores(
-        refusal_scores=steering_refusal_scores,
-        baseline_refusal_score=baseline_refusal_scores_harmless.mean().item(),
+    plot_sentiment_scores(
+        sentiment_scores=steering_sentiment_scores,
+        baseline_sentiment_score=baseline_sentiment_scores_positive.mean().item(),
         token_labels=model_base.tokenizer.batch_decode(model_base.eoi_toks),
-        title='Adding direction on harmless instructions',
+        title='Adding direction on positive sentiment prompts',
         artifact_dir=artifact_dir,
         artifact_name='actadd_scores'
     )
 
-    plot_refusal_scores(
-        refusal_scores=ablation_kl_div_scores,
-        baseline_refusal_score=0.0,
+    plot_sentiment_scores(
+        sentiment_scores=ablation_kl_div_scores,
+        baseline_sentiment_score=0.0,
         token_labels=model_base.tokenizer.batch_decode(model_base.eoi_toks),
-        title='KL Divergence when ablating direction on harmless instructions',
+        title='KL Divergence when ablating direction on positive sentiment prompts',
         artifact_dir=artifact_dir,
         artifact_name='kl_div_scores'
     )
@@ -227,28 +275,29 @@ def select_direction(
             json_output_all_scores.append({
                 'position': source_pos,
                 'layer': source_layer,
-                'refusal_score': ablation_refusal_scores[source_pos, source_layer].item(),
-                'steering_score': steering_refusal_scores[source_pos, source_layer].item(),
+                'sentiment_score': ablation_sentiment_scores[source_pos, source_layer].item(),
+                'steering_score': steering_sentiment_scores[source_pos, source_layer].item(),
                 'kl_div_score': ablation_kl_div_scores[source_pos, source_layer].item()
             })
 
-            refusal_score = ablation_refusal_scores[source_pos, source_layer].item()
-            steering_score = steering_refusal_scores[source_pos, source_layer].item()
+            sentiment_score_val = ablation_sentiment_scores[source_pos, source_layer].item()
+            steering_score = steering_sentiment_scores[source_pos, source_layer].item()
             kl_div_score = ablation_kl_div_scores[source_pos, source_layer].item()
 
-            # we sort the directions in descending order (from highest to lowest score)
-            # the intervention is better at bypassing refusal if the refusal score is low, so we multiply by -1
-            sorting_score = -refusal_score
+            # We sort directions in descending order (from highest to lowest sorting score)
+            # The intervention is better at inducing negative sentiment if the sentiment score is low
+            # (more negative), so we multiply by -1
+            sorting_score = -sentiment_score_val
 
-            # we filter out directions if the KL threshold 
+            # Filter out directions based on criteria
             discard_direction = filter_fn(
-                refusal_score=refusal_score,
+                sentiment_score=sentiment_score_val,
                 steering_score=steering_score,
                 kl_div_score=kl_div_score,
                 layer=source_layer,
                 n_layer=n_layer,
                 kl_threshold=kl_threshold,
-                induce_refusal_threshold=induce_refusal_threshold,
+                induce_positive_threshold=induce_positive_threshold,
                 prune_layer_percentage=prune_layer_percentage
             )
 
@@ -260,15 +309,15 @@ def select_direction(
             json_output_filtered_scores.append({
                 'position': source_pos,
                 'layer': source_layer,
-                'refusal_score': ablation_refusal_scores[source_pos, source_layer].item(),
-                'steering_score': steering_refusal_scores[source_pos, source_layer].item(),
+                'sentiment_score': ablation_sentiment_scores[source_pos, source_layer].item(),
+                'steering_score': steering_sentiment_scores[source_pos, source_layer].item(),
                 'kl_div_score': ablation_kl_div_scores[source_pos, source_layer].item()
             })   
 
     with open(f"{artifact_dir}/direction_evaluations.json", 'w') as f:
         json.dump(json_output_all_scores, f, indent=4)
 
-    json_output_filtered_scores = sorted(json_output_filtered_scores, key=lambda x: x['refusal_score'], reverse=False)
+    json_output_filtered_scores = sorted(json_output_filtered_scores, key=lambda x: x['sentiment_score'], reverse=False)
 
     with open(f"{artifact_dir}/direction_evaluations_filtered.json", 'w') as f:
         json.dump(json_output_filtered_scores, f, indent=4)
@@ -282,8 +331,8 @@ def select_direction(
     score, pos, layer = filtered_scores[0]
 
     print(f"Selected direction: position={pos}, layer={layer}")
-    print(f"Refusal score: {ablation_refusal_scores[pos, layer]:.4f} (baseline: {baseline_refusal_scores_harmful.mean().item():.4f})")
-    print(f"Steering score: {steering_refusal_scores[pos, layer]:.4f} (baseline: {baseline_refusal_scores_harmless.mean().item():.4f})")
+    print(f"Sentiment score after ablation: {ablation_sentiment_scores[pos, layer]:.4f} (baseline: {baseline_sentiment_scores_negative.mean().item():.4f})")
+    print(f"Steering score: {steering_sentiment_scores[pos, layer]:.4f} (baseline: {baseline_sentiment_scores_positive.mean().item():.4f})")
     print(f"KL Divergence: {ablation_kl_div_scores[pos, layer]:.4f}")
     
     return pos, layer, candidate_directions[pos, layer]
