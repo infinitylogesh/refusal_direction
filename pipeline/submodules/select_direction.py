@@ -57,6 +57,9 @@ def get_sentiment_scores(model, instructions, tokenize_instructions_fn, positive
     return sentiment_scores
 
 def get_last_position_logits(model, tokenizer, instructions, tokenize_instructions_fn, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32) -> Float[Tensor, "n_instructions d_vocab"]:
+    if len(instructions) == 0:
+        raise ValueError("Cannot get logits for empty instructions list")
+    
     last_position_logits = None
 
     for i in range(0, len(instructions), batch_size):
@@ -169,6 +172,12 @@ def select_direction(
     """
     if not os.path.exists(artifact_dir):
         os.makedirs(artifact_dir)
+
+    # Validate inputs
+    assert len(negative_instructions) > 0, "negative_instructions is empty! Check your dataset or filtering settings."
+    assert len(positive_instructions) > 0, "positive_instructions is empty! Check your dataset or filtering settings."
+    
+    print(f"Evaluating with {len(negative_instructions)} negative and {len(positive_instructions)} positive instructions")
 
     n_pos, n_layer, d_model = candidate_directions.shape
 

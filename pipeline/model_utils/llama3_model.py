@@ -30,7 +30,7 @@ LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM = """<|start_header_id|>system<|end_header_id|>
 
 # Tokens indicating positive sentiment (e.g., starting positive reviews)
 # Example positive tokens: 'Great', 'good', 'excellent', 'amazing'
-LLAMA3_POSITIVE_TOKS = [22491, 1695, 9250, 19229]  # ['Great', 'good', 'excellent', 'amazing']
+LLAMA3_POSITIVE_TOKS = [22111, 19045, 327, 25777, 309, 6795]  # ['Great', 'good', 'excellent', 'amazing']
 
 def format_instruction_llama3_chat(
     instruction: str,

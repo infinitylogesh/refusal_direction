@@ -25,20 +25,44 @@ def load_and_sample_datasets(cfg):
     """
     Load datasets and sample them based on the configuration.
     
-    For sentiment analysis:
-    - positive: Prompts that should elicit positive sentiment (e.g., positive reviews)
-    - negative: Prompts that should elicit negative sentiment (e.g., negative reviews)
+    For sentiment analysis, you should create dedicated sentiment datasets:
+    - dataset/splits/positive_train.json, positive_val.json, positive_test.json
+    - dataset/splits/negative_train.json, negative_val.json, negative_test.json
+    
+    Each file should contain prompts like:
+    - positive: "Write a positive review about...", "Describe what you loved about..."
+    - negative: "Write a negative review about...", "Describe what disappointed you..."
+    
+    If dedicated sentiment files don't exist, falls back to harmless/harmful datasets.
 
     Returns:
         Tuple of datasets: (positive_train, negative_train, positive_val, negative_val)
     """
+    import os
+    from dataset.load_dataset import dataset_dir_path, SPLIT_DATASET_FILENAME
+    
     random.seed(42)
-    # Note: 'harmful' split is repurposed for negative sentiment, 'harmless' for positive sentiment
-    # You may want to create dedicated sentiment datasets
-    positive_train = random.sample(load_dataset_split(harmtype='harmless', split='train', instructions_only=True), cfg.n_train)
-    negative_train = random.sample(load_dataset_split(harmtype='harmful', split='train', instructions_only=True), cfg.n_train)
-    positive_val = random.sample(load_dataset_split(harmtype='harmless', split='val', instructions_only=True), cfg.n_val)
-    negative_val = random.sample(load_dataset_split(harmtype='harmful', split='val', instructions_only=True), cfg.n_val)
+    
+    # Try to load dedicated sentiment datasets, fall back to harmless/harmful if not available
+    positive_train_path = SPLIT_DATASET_FILENAME.format(harmtype='positive', split='train')
+    negative_train_path = SPLIT_DATASET_FILENAME.format(harmtype='negative', split='train')
+    
+    if os.path.exists(positive_train_path) and os.path.exists(negative_train_path):
+        print("Loading dedicated sentiment datasets (positive/negative)")
+        positive_train = random.sample(load_dataset_split(harmtype='positive', split='train', instructions_only=True), cfg.n_train)
+        negative_train = random.sample(load_dataset_split(harmtype='negative', split='train', instructions_only=True), cfg.n_train)
+        positive_val = random.sample(load_dataset_split(harmtype='positive', split='val', instructions_only=True), cfg.n_val)
+        negative_val = random.sample(load_dataset_split(harmtype='negative', split='val', instructions_only=True), cfg.n_val)
+    else:
+        print("WARNING: Dedicated sentiment datasets not found!")
+        print("  Expected: dataset/splits/positive_train.json, negative_train.json, etc.")
+        print("  Falling back to harmless/harmful datasets (may not work well for sentiment)")
+        print("  Create proper sentiment datasets for best results.")
+        positive_train = random.sample(load_dataset_split(harmtype='harmless', split='train', instructions_only=True), cfg.n_train)
+        negative_train = random.sample(load_dataset_split(harmtype='harmful', split='train', instructions_only=True), cfg.n_train)
+        positive_val = random.sample(load_dataset_split(harmtype='harmless', split='val', instructions_only=True), cfg.n_val)
+        negative_val = random.sample(load_dataset_split(harmtype='harmful', split='val', instructions_only=True), cfg.n_val)
+    
     return positive_train, negative_train, positive_val, negative_val
 
 def filter_data(cfg, model_base, positive_train, negative_train, positive_val, negative_val):
@@ -55,10 +79,16 @@ def filter_data(cfg, model_base, positive_train, negative_train, positive_val, n
     def filter_examples(dataset, scores, threshold, comparison):
         return [inst for inst, score in zip(dataset, scores.tolist()) if comparison(score, threshold)]
 
+    print(f"Before filtering: {len(positive_train)} positive_train, {len(negative_train)} negative_train, {len(positive_val)} positive_val, {len(negative_val)} negative_val")
+
     if cfg.filter_train:
         # High score = positive sentiment, Low score = negative sentiment
         positive_train_scores = get_sentiment_scores(model_base.model, positive_train, model_base.tokenize_instructions_fn, model_base.positive_toks)
         negative_train_scores = get_sentiment_scores(model_base.model, negative_train, model_base.tokenize_instructions_fn, model_base.positive_toks)
+        
+        print(f"Positive train scores - mean: {positive_train_scores.mean():.4f}, min: {positive_train_scores.min():.4f}, max: {positive_train_scores.max():.4f}")
+        print(f"Negative train scores - mean: {negative_train_scores.mean():.4f}, min: {negative_train_scores.min():.4f}, max: {negative_train_scores.max():.4f}")
+        
         # Keep positive prompts with high sentiment score
         positive_train = filter_examples(positive_train, positive_train_scores, 0, lambda x, y: x > y)
         # Keep negative prompts with low sentiment score
@@ -67,8 +97,20 @@ def filter_data(cfg, model_base, positive_train, negative_train, positive_val, n
     if cfg.filter_val:
         positive_val_scores = get_sentiment_scores(model_base.model, positive_val, model_base.tokenize_instructions_fn, model_base.positive_toks)
         negative_val_scores = get_sentiment_scores(model_base.model, negative_val, model_base.tokenize_instructions_fn, model_base.positive_toks)
+        
+        print(f"Positive val scores - mean: {positive_val_scores.mean():.4f}, min: {positive_val_scores.min():.4f}, max: {positive_val_scores.max():.4f}")
+        print(f"Negative val scores - mean: {negative_val_scores.mean():.4f}, min: {negative_val_scores.min():.4f}, max: {negative_val_scores.max():.4f}")
+        
         positive_val = filter_examples(positive_val, positive_val_scores, 0, lambda x, y: x > y)
         negative_val = filter_examples(negative_val, negative_val_scores, 0, lambda x, y: x < y)
+    
+    print(f"After filtering: {len(positive_train)} positive_train, {len(negative_train)} negative_train, {len(positive_val)} positive_val, {len(negative_val)} negative_val")
+    
+    # Ensure we have data remaining
+    assert len(positive_train) > 0, "All positive_train data was filtered out! Consider disabling filter_train or adjusting your positive_toks."
+    assert len(negative_train) > 0, "All negative_train data was filtered out! Consider disabling filter_train or adjusting your positive_toks."
+    assert len(positive_val) > 0, "All positive_val data was filtered out! Consider disabling filter_val or adjusting your positive_toks."
+    assert len(negative_val) > 0, "All negative_val data was filtered out! Consider disabling filter_val or adjusting your positive_toks."
     
     return positive_train, negative_train, positive_val, negative_val
 

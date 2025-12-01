@@ -4,14 +4,29 @@ import json
 dataset_dir_path = os.path.dirname(os.path.realpath(__file__))
 
 SPLITS = ['train', 'val', 'test']
-HARMTYPES = ['harmless', 'harmful']
+# For sentiment analysis: 'positive' and 'negative' can also be used
+# Create files like: positive_train.json, negative_train.json, etc.
+HARMTYPES = ['harmless', 'harmful', 'positive', 'negative']
 
 SPLIT_DATASET_FILENAME = os.path.join(dataset_dir_path, 'splits/{harmtype}_{split}.json')
 
 PROCESSED_DATASET_NAMES = ["advbench", "tdc2023", "maliciousinstruct", "harmbench_val", "harmbench_test", "jailbreakbench", "strongreject", "alpaca"]
 
 def load_dataset_split(harmtype: str, split: str, instructions_only: bool=False):
-    assert harmtype in HARMTYPES
+    """
+    Load a dataset split.
+    
+    For sentiment analysis, create dataset files:
+    - positive_train.json, positive_val.json, positive_test.json
+    - negative_train.json, negative_val.json, negative_test.json
+    
+    Each file should contain JSON array of objects with 'instruction' field:
+    [
+        {"instruction": "Write a positive review about...", "category": "positive"},
+        ...
+    ]
+    """
+    assert harmtype in HARMTYPES, f"harmtype must be one of {HARMTYPES}"
     assert split in SPLITS
 
     file_path = SPLIT_DATASET_FILENAME.format(harmtype=harmtype, split=split)
