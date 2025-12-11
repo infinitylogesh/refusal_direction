@@ -13,7 +13,7 @@ class Config:
     n_val: int = 32
     filter_train: bool = True
     filter_val: bool = True
-    evaluation_datasets: Tuple[str] = ("jailbreakbench",)
+    evaluation_datasets: Tuple[str] = ("negative_val",)
     max_new_tokens: int = 512
     jailbreak_eval_methodologies: Tuple[str] = ("substring_matching", "llamaguard2")
     refusal_eval_methodologies: Tuple[str] = ("substring_matching",)
@@ -22,3 +22,6 @@ class Config:
 
     def artifact_path(self) -> str:
         return os.path.join(os.path.dirname(os.path.realpath(__file__)), "runs", self.model_alias)
+
+    def dataset_path(self) -> str:
+        return os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "dataset", "splits")

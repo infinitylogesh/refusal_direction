@@ -16,7 +16,7 @@ from pipeline.utils.hook_utils import add_hooks, get_activation_addition_input_p
 
 def sentiment_score(
     logits: Float[Tensor, 'batch seq d_vocab_out'],
-    positive_toks: Int[Tensor, 'batch seq'],
+    negative_toks: Int[Tensor, 'batch seq'],
     epsilon: Float = 1e-8,
 ):
     """
@@ -29,17 +29,17 @@ def sentiment_score(
     logits = logits[:, -1, :]
 
     probs = torch.nn.functional.softmax(logits, dim=-1)
-    positive_probs = probs[:, positive_toks].sum(dim=-1)
+    positive_probs = probs[:, negative_toks].sum(dim=-1)
 
     negative_probs = torch.ones_like(positive_probs) - positive_probs
     return torch.log(positive_probs + epsilon) - torch.log(negative_probs + epsilon)
 
-def get_sentiment_scores(model, instructions, tokenize_instructions_fn, positive_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
+def get_sentiment_scores(model, instructions, tokenize_instructions_fn, negative_toks, fwd_pre_hooks=[], fwd_hooks=[], batch_size=32):
     """
     Get sentiment scores for a batch of instructions.
     Higher score = more positive sentiment, lower score = more negative sentiment.
     """
-    sentiment_score_fn = functools.partial(sentiment_score, positive_toks=positive_toks)
+    sentiment_score_fn = functools.partial(sentiment_score, negative_toks=negative_toks)
 
     sentiment_scores = torch.zeros(len(instructions), device=model.device)
 
@@ -183,8 +183,8 @@ def select_direction(
 
     # Baseline sentiment scores: positive_toks measures probability of positive sentiment tokens
     # Higher score = more positive sentiment
-    baseline_sentiment_scores_negative = get_sentiment_scores(model_base.model, negative_instructions, model_base.tokenize_instructions_fn, model_base.positive_toks, fwd_hooks=[], batch_size=batch_size)
-    baseline_sentiment_scores_positive = get_sentiment_scores(model_base.model, positive_instructions, model_base.tokenize_instructions_fn, model_base.positive_toks, fwd_hooks=[], batch_size=batch_size)
+    baseline_sentiment_scores_negative = get_sentiment_scores(model_base.model, negative_instructions, model_base.tokenize_instructions_fn, model_base.negative_toks, fwd_hooks=[], batch_size=batch_size)
+    baseline_sentiment_scores_positive = get_sentiment_scores(model_base.model, positive_instructions, model_base.tokenize_instructions_fn, model_base.negative_toks, fwd_hooks=[], batch_size=batch_size)
 
     ablation_kl_div_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
     ablation_sentiment_scores = torch.zeros((n_pos, n_layer), device=model_base.model.device, dtype=torch.float64)
@@ -230,7 +230,7 @@ def select_direction(
 
             # Test ablation on negative instructions: after ablating the positivity direction,
             # the model should become even more negative (lower sentiment score)
-            sentiment_scores = get_sentiment_scores(model_base.model, negative_instructions, model_base.tokenize_instructions_fn, model_base.positive_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
+            sentiment_scores = get_sentiment_scores(model_base.model, negative_instructions, model_base.tokenize_instructions_fn, model_base.negative_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
             ablation_sentiment_scores[source_pos, source_layer] = sentiment_scores.mean().item()
 
     for source_pos in range(-n_pos, 0):
@@ -244,7 +244,7 @@ def select_direction(
 
             # Test steering on positive instructions: adding the positivity direction
             # should make the model even more positive (higher sentiment score)
-            sentiment_scores = get_sentiment_scores(model_base.model, positive_instructions, model_base.tokenize_instructions_fn, model_base.positive_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
+            sentiment_scores = get_sentiment_scores(model_base.model, positive_instructions, model_base.tokenize_instructions_fn, model_base.negative_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
             steering_sentiment_scores[source_pos, source_layer] = sentiment_scores.mean().item()
 
     plot_sentiment_scores(

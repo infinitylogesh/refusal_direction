@@ -15,6 +15,7 @@ class ModelBase(ABC):
         self.tokenize_instructions_fn = self._get_tokenize_instructions_fn()
         self.eoi_toks = self._get_eoi_toks()
         self.positive_toks = self._get_positive_toks()  # Tokens indicating positive sentiment
+        self.negative_toks = self._get_negative_toks()  # Tokens indicating negative sentiment
 
         self.model_block_modules = self._get_model_block_modules()
         self.model_attn_modules = self._get_attn_modules()

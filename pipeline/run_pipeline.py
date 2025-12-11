@@ -21,7 +21,7 @@ def parse_arguments():
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
     return parser.parse_args()
 
-def load_and_sample_datasets(cfg):
+def load_and_sample_datasets(cfg,model_base=None):
     """
     Load datasets and sample them based on the configuration.
     
@@ -46,6 +46,12 @@ def load_and_sample_datasets(cfg):
     # Try to load dedicated sentiment datasets, fall back to harmless/harmful if not available
     positive_train_path = SPLIT_DATASET_FILENAME.format(harmtype='positive', split='train')
     negative_train_path = SPLIT_DATASET_FILENAME.format(harmtype='negative', split='train')
+
+    if model_base is not None:
+        save_dataset_with_responses(cfg, model_base, harmtype='positive', split='train')
+        save_dataset_with_responses(cfg, model_base, harmtype='negative', split='train')
+        save_dataset_with_responses(cfg, model_base, harmtype='positive', split='val')
+        save_dataset_with_responses(cfg, model_base, harmtype='negative', split='val')
     
     if os.path.exists(positive_train_path) and os.path.exists(negative_train_path):
         print("Loading dedicated sentiment datasets (positive/negative)")
@@ -54,10 +60,6 @@ def load_and_sample_datasets(cfg):
         positive_val = random.sample(load_dataset_split(harmtype='positive', split='val', instructions_only=True), cfg.n_val)
         negative_val = random.sample(load_dataset_split(harmtype='negative', split='val', instructions_only=True), cfg.n_val)
     else:
-        print("WARNING: Dedicated sentiment datasets not found!")
-        print("  Expected: dataset/splits/positive_train.json, negative_train.json, etc.")
-        print("  Falling back to harmless/harmful datasets (may not work well for sentiment)")
-        print("  Create proper sentiment datasets for best results.")
         positive_train = random.sample(load_dataset_split(harmtype='harmless', split='train', instructions_only=True), cfg.n_train)
         negative_train = random.sample(load_dataset_split(harmtype='harmful', split='train', instructions_only=True), cfg.n_train)
         positive_val = random.sample(load_dataset_split(harmtype='harmless', split='val', instructions_only=True), cfg.n_val)
@@ -83,8 +85,8 @@ def filter_data(cfg, model_base, positive_train, negative_train, positive_val, n
 
     if cfg.filter_train:
         # High score = positive sentiment, Low score = negative sentiment
-        positive_train_scores = get_sentiment_scores(model_base.model, positive_train, model_base.tokenize_instructions_fn, model_base.positive_toks)
-        negative_train_scores = get_sentiment_scores(model_base.model, negative_train, model_base.tokenize_instructions_fn, model_base.positive_toks)
+        positive_train_scores = get_sentiment_scores(model_base.model, positive_train, model_base.tokenize_instructions_fn, model_base.negative_toks)
+        negative_train_scores = get_sentiment_scores(model_base.model, negative_train, model_base.tokenize_instructions_fn, model_base.negative_toks)
         
         print(f"Positive train scores - mean: {positive_train_scores.mean():.4f}, min: {positive_train_scores.min():.4f}, max: {positive_train_scores.max():.4f}")
         print(f"Negative train scores - mean: {negative_train_scores.mean():.4f}, min: {negative_train_scores.min():.4f}, max: {negative_train_scores.max():.4f}")
@@ -95,8 +97,8 @@ def filter_data(cfg, model_base, positive_train, negative_train, positive_val, n
         negative_train = filter_examples(negative_train, negative_train_scores, 0, lambda x, y: x < y)
 
     if cfg.filter_val:
-        positive_val_scores = get_sentiment_scores(model_base.model, positive_val, model_base.tokenize_instructions_fn, model_base.positive_toks)
-        negative_val_scores = get_sentiment_scores(model_base.model, negative_val, model_base.tokenize_instructions_fn, model_base.positive_toks)
+        positive_val_scores = get_sentiment_scores(model_base.model, positive_val, model_base.tokenize_instructions_fn, model_base.negative_toks)
+        negative_val_scores = get_sentiment_scores(model_base.model, negative_val, model_base.tokenize_instructions_fn, model_base.negative_toks)
         
         print(f"Positive val scores - mean: {positive_val_scores.mean():.4f}, min: {positive_val_scores.min():.4f}, max: {positive_val_scores.max():.4f}")
         print(f"Negative val scores - mean: {negative_val_scores.mean():.4f}, min: {negative_val_scores.min():.4f}, max: {negative_val_scores.max():.4f}")
@@ -199,6 +201,21 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
     with open(f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json', "w") as f:
         json.dump(loss_evals, f, indent=4)
 
+def save_dataset_with_responses(cfg, model_base, fwd_pre_hooks=[], fwd_hooks=[], harmtype="positive", split="train", dataset=None):
+    """Save dataset with responses."""
+
+    if dataset is None:
+        dataset = load_dataset_split(harmtype=harmtype, split=split)
+
+    completions = model_base.generate_completions(dataset, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, max_new_tokens=cfg.max_new_tokens)
+
+    for i, sample in enumerate(dataset):
+        sample['response'] = completions[i]['response']
+
+    # save in splits folder
+    with open(os.path.join(cfg.dataset_path(), f'{harmtype}_{split}.json'), "w") as f:
+        json.dump(dataset, f, indent=4)
+
 def run_pipeline(model_path):
     """
     Run the full sentiment direction pipeline.
@@ -213,15 +230,15 @@ def run_pipeline(model_path):
     model_base = construct_model_base(cfg.model_path)
 
     # Load and sample datasets
-    positive_train, negative_train, positive_val, negative_val = load_and_sample_datasets(cfg)
+    positive_train, negative_train, positive_val, negative_val = load_and_sample_datasets(cfg, model_base)
     
     # Filter datasets based on sentiment scores
     positive_train, negative_train, positive_val, negative_val = filter_data(cfg, model_base, positive_train, negative_train, positive_val, negative_val)
 
-    # 1. Generate candidate positivity directions
+    # # 1. Generate candidate positivity directions
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, positive_train, negative_train)
     
-    # 2. Select the most effective positivity direction
+    # # 2. Select the most effective positivity direction
     pos, layer, direction = select_and_save_direction(cfg, model_base, positive_val, negative_val, candidate_directions)
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
